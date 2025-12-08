@@ -1,4 +1,5 @@
 #pragma once
+#include "adc.h"
 
 /**
  * @brief CLI FreeRTOS task

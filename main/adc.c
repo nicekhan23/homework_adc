@@ -1,6 +1,7 @@
 #include "adc.h"
 #include "driver/adc.h"
 #include "nvs.h"
+#include "esp_console.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 

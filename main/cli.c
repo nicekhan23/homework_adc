@@ -5,6 +5,24 @@
 #include "argtable3/argtable3.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+int channel_min[CH_MAX] = {0, 0, 0, 0, 0, 0};
+int channel_max[CH_MAX] = {4095, 4095, 4095, 4095, 4095, 4095};
+
+/**
+ * @brief Initialize console
+ */
+static void cli_init(void)
+{
+    esp_console_config_t console_config = {
+        .max_cmdline_length = 128,
+        .max_cmdline_args = 8,
+    };
+    esp_console_init(&console_config);
+
+    register_commands();
+}
 
 /**
  * @brief Configure ADC channel settings via CLI
@@ -98,4 +116,35 @@ void register_config_command(void)
         .hint = "[-h] [-r] [-w] [-c <ch>] [-m <min>] [-M <max>] [-s]",
         .func = &config_cmd
     });
+}
+
+/**
+ * @brief Register all CLI commands
+ */
+void register_commands(void)
+{
+    esp_console_register_help_command();
+    register_config_command();
+}
+
+/**
+ * @brief CLI task for FreeRTOS
+ */
+void cli_task(void *arg)
+{
+    cli_init();
+    
+    printf("\nESP32 ADC CLI ready\n");
+    printf("Type 'help' for available commands\n\n");
+    
+    // Start the console REPL
+    esp_console_repl_t *repl = NULL;
+    esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
+    repl_config.prompt = "CMD> ";
+    repl_config.max_cmdline_length = 128;
+    
+    esp_console_dev_uart_config_t uart_config = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_console_new_repl_uart(&uart_config, &repl_config, &repl));
+    
+    ESP_ERROR_CHECK(esp_console_start_repl(repl));
 }

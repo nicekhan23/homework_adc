@@ -76,29 +76,58 @@ static int config_cmd(int argc, char **argv)
 
     // Set min/max for a specific channel
     if (ch != -1) {
+        bool changed = false;
+    
         if (minval->count > 0) {
             int val = minval->ival[0];
-            if (val < 0 || val > 4095) { printf("Invalid min value\n"); arg_freetable(argtable, sizeof(argtable)/sizeof(argtable[0])); return 1;}
+            if (val < 0 || val > 4095) { 
+                printf("Error: min value must be 0-4095\n"); 
+                arg_freetable(argtable, sizeof(argtable)/sizeof(argtable[0])); 
+                return 1;
+            }
             channel_min[ch] = val;
             printf("CH%d min set to %d\n", ch, val);
+            changed = true;
         }
+    
         if (maxval->count > 0) {
             int val = maxval->ival[0];
-            if (val < 0 || val > 4095) { printf("Invalid max value\n"); arg_freetable(argtable, sizeof(argtable)/sizeof(argtable[0])); return 1;}
+            if (val < 0 || val > 4095) { 
+                printf("Error: max value must be 0-4095\n"); 
+                arg_freetable(argtable, sizeof(argtable)/sizeof(argtable[0])); 
+                return 1;
+            }
             channel_max[ch] = val;
             printf("CH%d max set to %d\n", ch, val);
+        changed = true;
         }
-        if (minval->count > 0 && maxval->count > 0 && channel_min[ch] > channel_max[ch]) {
-            printf("Warning: min > max, swapping values\n");
-            int tmp = channel_min[ch]; channel_min[ch] = channel_max[ch]; channel_max[ch] = tmp;
+    
+        // Validate min <= max
+        if (channel_min[ch] > channel_max[ch]) {
+            printf("Warning: min (%d) > max (%d), swapping values\n", 
+                    channel_min[ch], channel_max[ch]);
+            int tmp = channel_min[ch]; 
+            channel_min[ch] = channel_max[ch]; 
+            channel_max[ch] = tmp;
+        }
+    
+        // Auto-save to NVS when changed
+        if (changed) {
+            nvs_set_channel_i32("ch_min", ch, channel_min[ch]);
+            nvs_set_channel_i32("ch_max", ch, channel_max[ch]);
+            printf("Changes saved to NVS for CH%d\n", ch);
         }
     }
 
-    // Start info
+    // Start info - show current state
     if (start->count > 0) {
+        printf("\n=== Channel Status ===\n");
         for (int i = 0; i < CH_MAX; i++) {
-            printf("CH%d: min=%d max=%d filtered=%d\n", i, channel_min[i], channel_max[i], adc_filtered[i]);
+            printf("CH%d: min=%4d, max=%4d, raw=%4d, avg=%4d, filtered=%4d, hyst=%d\n", 
+                    i, channel_min[i], channel_max[i], 
+                    adc_raw[i], adc_avg[i], adc_filtered[i], hysteresis[i]);
         }
+        printf("======================\n");
     }
 
     arg_freetable(argtable, sizeof(argtable)/sizeof(argtable[0]));
@@ -133,6 +162,13 @@ void register_commands(void)
 void cli_task(void *arg)
 {
     cli_init();
+
+    // Load min/max from NVS on startup
+    for (int i = 0; i < CH_MAX; i++) {
+        channel_min[i] = nvs_get_channel_i32("ch_min", i, 0);
+        channel_max[i] = nvs_get_channel_i32("ch_max", i, 4095);
+    }
+    printf("Loaded channel configuration from NVS\n");
     
     printf("\nESP32 ADC CLI ready\n");
     printf("Type 'help' for available commands\n\n");

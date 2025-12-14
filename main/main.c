@@ -8,7 +8,6 @@
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-
 #include "adc.h"
 #include "cli.h"
 #include "nvs.h"
@@ -20,12 +19,8 @@
  */
 void app_main(void)
 {
-    // Initialize NVS first
     nvs_init();
-    
-    // Start ADC task
     xTaskCreate(adc_task, "adc_task", 4096, NULL, 5, NULL);
-    
-    // Start CLI task - it will take over console output
     xTaskCreate(cli_task, "cli_task", 8192, NULL, 4, NULL);
 }
+

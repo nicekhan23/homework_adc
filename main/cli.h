@@ -2,18 +2,18 @@
 #include "adc.h"
 
 /**
+ * @brief Initialize CLI subsystem
+ * @return ESP_OK on success
+ */
+esp_err_t cli_init(void);
+
+/**
  * @brief CLI FreeRTOS task
- * @param arg Task argument (unused)
  */
 void cli_task(void *arg);
 
 /**
- * @brief Register console commands
- */
-void register_commands(void);
-
-/**
- * @brief Channel minimum and maximum values
+ * @brief Channel configuration
  */
 extern int channel_min[CH_MAX];
 extern int channel_max[CH_MAX];

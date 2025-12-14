@@ -225,19 +225,27 @@ void cli_task(void *arg)
         // Add to history
         linenoiseHistoryAdd(line);
     
-        // Execute command
-        int ret;
-        esp_err_t err = esp_console_run(line, &ret);
-        if (err == ESP_ERR_NOT_FOUND) {
-            printf("Unknown command. Type 'help' for list.\n");
-        } else if (err == ESP_ERR_INVALID_ARG) {
-            // Command was empty, already handled
-        } else if (err == ESP_OK && ret != ESP_OK) {
-            printf("Command error: 0x%x\n", ret);
-        } else if (err != ESP_OK) {
-            printf("Error: %s\n", esp_err_to_name(err));
+        // Trim leading/trailing whitespace
+        char *trimmed = line;
+        while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
+        size_t len = strlen(trimmed);
+        while (len > 0 && (trimmed[len-1] == ' ' || trimmed[len-1] == '\t' || trimmed[len-1] == '\n' || trimmed[len-1] == '\r')) {
+            trimmed[--len] = '\0';
         }
-    
+
+        // Only execute if not empty after trimming
+        if (len > 0) {
+            int ret;
+            esp_err_t err = esp_console_run(trimmed, &ret);
+            if (err == ESP_ERR_NOT_FOUND) {
+                printf("Unknown command. Type 'help' for list.\n");
+            } else if (err == ESP_OK && ret != ESP_OK) {
+                printf("Command error: 0x%x\n", ret);
+            } else if (err != ESP_OK && err != ESP_ERR_INVALID_ARG) {
+                printf("Error: %s\n", esp_err_to_name(err));
+            }
+        }
+
         linenoiseFree(line);
     }
 }

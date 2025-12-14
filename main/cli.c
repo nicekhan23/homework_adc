@@ -7,6 +7,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include "driver/uart.h"
+#include "esp_vfs_dev.h"
+#include "esp_log.h"
 
 #define CMD_CONFIG "config"
 
@@ -24,21 +27,6 @@ static struct {
     struct arg_int *hyst;
     struct arg_end *end;
 } config_args;
-
-
-/**
- * @brief Initialize console
- */
-static void cli_init(void)
-{
-    esp_console_config_t console_config = {
-        .max_cmdline_length = 128,
-        .max_cmdline_args = 8,
-    };
-    esp_console_init(&console_config);
-
-    register_commands();
-}
 
 /**
  * @brief Configure ADC channel settings via CLI
@@ -198,41 +186,46 @@ void register_commands(void)
  */
 void cli_task(void *arg)
 {
+    ESP_LOGI("CLI", "cli_task started");
+
+    uart_driver_install(
+        UART_NUM_0,
+        256,    // RX buffer
+        0,
+        0,
+        NULL,
+        0
+    );
+
+    esp_vfs_dev_uart_use_driver(UART_NUM_0);
+
+    ESP_LOGI("CLI", "UART attached to VFS");
+
     // Initialize console
-    esp_console_config_t console_config = {
+        esp_console_config_t console_config = {
         .max_cmdline_length = 128,
         .max_cmdline_args = 8,
     };
     esp_console_init(&console_config);
 
-    // Register commands
     register_commands();
 
-    // Load from NVS
-    for (int i = 0; i < CH_MAX; i++) {
-        channel_min[i] = nvs_get_channel_i32("ch_min", i, 0);
-        channel_max[i] = nvs_get_channel_i32("ch_max", i, 4095);
-        hysteresis[i] = nvs_get_channel_i32("ch_hyst", i, 10);
-    }
-    
-    // Configure and start REPL
     esp_console_repl_t *repl = NULL;
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     repl_config.prompt = "CMD> ";
-    repl_config.max_cmdline_length = 128;
 
-    esp_console_dev_uart_config_t uart_config = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
-    
-    esp_err_t err = esp_console_new_repl_uart(&uart_config, &repl_config, &repl);
+    esp_console_dev_uart_config_t uart_config =
+        ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
+
+    esp_err_t err = esp_console_new_repl_uart(
+        &uart_config, &repl_config, &repl
+    );
+
     if (err != ESP_OK) {
+        ESP_LOGE("CLI", "REPL init failed");
         vTaskDelete(NULL);
-        return;
     }
 
-    printf("\n=== ESP32 ADC CLI ===\n");
-    printf("Loaded configuration from NVS\n");
-    printf("Type 'help' for commands\n");
-    printf("=====================\n\n");
-
+    ESP_LOGI("CLI", "Starting REPL");
     esp_console_start_repl(repl);
 }

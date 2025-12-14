@@ -1,11 +1,8 @@
 #pragma once
+#include "esp_err.h"
 #include "adc.h"
 
-/**
- * @brief Initialize CLI subsystem
- * @return ESP_OK on success
- */
-esp_err_t cli_init(void);
+void register_commands(void);
 
 /**
  * @brief CLI FreeRTOS task

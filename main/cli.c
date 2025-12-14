@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "linenoise/linenoise.h"
 
 int channel_min[CH_MAX] = {0, 0, 0, 0, 0, 0};
 int channel_max[CH_MAX] = {4095, 4095, 4095, 4095, 4095, 4095};
@@ -198,54 +197,23 @@ void cli_task(void *arg)
     printf("\nESP32 ADC CLI ready\n");
     printf("Type 'help' for available commands\n\n");
 
-    // Initialize linenoise for arrow key support
-    linenoiseSetMultiLine(1);
-    linenoiseSetMaxLineLen(128);
-    linenoiseHistorySetMaxLen(50);  // Remember last 50 commands
+    // Start the console REPL
+    esp_console_repl_t *repl = NULL;
+    esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
+    repl_config.prompt = "CMD> ";
+    repl_config.max_cmdline_length = 128;
 
-    char *line;
-    while(1) {
-        line = linenoise("CMD> ");
+    esp_console_dev_uart_config_t uart_config = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
     
-        if (line == NULL) {  // EOF or error
-        vTaskDelay(pdMS_TO_TICKS(100));  // Increase delay
-        continue;
-        }
+    esp_err_t err = esp_console_new_repl_uart(&uart_config, &repl_config, &repl);
+    if (err != ESP_OK) {
+        printf("Error creating REPL: %s\n", esp_err_to_name(err));
+        vTaskDelete(NULL);
+        return;
+    }
 
-        // Trim whitespace
-        while (*line == ' ' || *line == '\t') line++;
-
-        // Skip empty lines
-        if (strlen(line) == 0) {
-            linenoiseFree(line);
-            vTaskDelay(pdMS_TO_TICKS(10));  // Add small delay here too
-            continue;
-        }
-    
-        // Add to history
-        linenoiseHistoryAdd(line);
-    
-        // Trim leading/trailing whitespace
-        char *trimmed = line;
-        while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
-        size_t len = strlen(trimmed);
-        while (len > 0 && (trimmed[len-1] == ' ' || trimmed[len-1] == '\t' || trimmed[len-1] == '\n' || trimmed[len-1] == '\r')) {
-            trimmed[--len] = '\0';
-        }
-
-        // Only execute if not empty after trimming
-        if (len > 0) {
-            int ret;
-            esp_err_t err = esp_console_run(trimmed, &ret);
-            if (err == ESP_ERR_NOT_FOUND) {
-                printf("Unknown command. Type 'help' for list.\n");
-            } else if (err == ESP_OK && ret != ESP_OK) {
-                printf("Command error: 0x%x\n", ret);
-            } else if (err != ESP_OK && err != ESP_ERR_INVALID_ARG) {
-                printf("Error: %s\n", esp_err_to_name(err));
-            }
-        }
-
-        linenoiseFree(line);
+    err = esp_console_start_repl(repl);
+    if (err != ESP_OK) {
+        printf("Error starting REPL: %s\n", esp_err_to_name(err));
     }
 }

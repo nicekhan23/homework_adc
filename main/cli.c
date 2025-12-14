@@ -208,13 +208,17 @@ void cli_task(void *arg)
         line = linenoise("CMD> ");
     
         if (line == NULL) {  // EOF or error
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
+        vTaskDelay(pdMS_TO_TICKS(100));  // Increase delay
+        continue;
         }
-    
+
+        // Trim whitespace
+        while (*line == ' ' || *line == '\t') line++;
+
         // Skip empty lines
         if (strlen(line) == 0) {
             linenoiseFree(line);
+            vTaskDelay(pdMS_TO_TICKS(10));  // Add small delay here too
             continue;
         }
     

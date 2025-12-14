@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "linenoise/linenoise.h"
 
 int channel_min[CH_MAX] = {0, 0, 0, 0, 0, 0};
 int channel_max[CH_MAX] = {4095, 4095, 4095, 4095, 4095, 4095};
@@ -37,13 +38,14 @@ static int config_cmd(int argc, char **argv)
     struct arg_int  *minval  = arg_int0("m", "min", "<val>", "Minimum value for channel");
     struct arg_int  *maxval  = arg_int0("M", "max", "<val>", "Maximum value for channel");
     struct arg_lit  *start   = arg_lit0("s", "start", "Show previous state/start CLI info");
+    struct arg_int  *hyst    = arg_int0("y", "hyst", "<val>", "Hysteresis value for channel");
     struct arg_end  *end     = arg_end(20);
 
-    void* argtable[] = {help, read, write, channel, minval, maxval, start, end};
+    void* argtable[] = {help, read, write, channel, minval, maxval, start, hyst, end};
 
     int nerrors = arg_parse(argc, argv, argtable);
     if (nerrors != 0 || help->count > 0) {
-        printf("Usage: config [-h] [-r] [-w] [-c <ch>] [-m <min>] [-M <max>] [-s]\n");
+        printf("Usage: config [-h] [-r] [-w] [-c <ch>] [-m <min>] [-M <max>] [-s] [-y <hyst>]\n");
         arg_print_errors(stdout, end, "config");
         arg_freetable(argtable, sizeof(argtable)/sizeof(argtable[0]));
         return 1;
@@ -75,7 +77,14 @@ static int config_cmd(int argc, char **argv)
     }
 
     // Set min/max for a specific channel
-    if (ch != -1) {
+    if (minval->count > 0 || maxval->count > 0) {
+        if (ch == -1) {
+            printf("Error: You must specify a channel with -c when setting min/max values\n");
+            printf("Example: config -c 0 -m 100 -M 3000\n");
+            arg_freetable(argtable, sizeof(argtable)/sizeof(argtable[0]));
+            return 1;
+        }
+    
         bool changed = false;
     
         if (minval->count > 0) {
@@ -99,13 +108,28 @@ static int config_cmd(int argc, char **argv)
             }
             channel_max[ch] = val;
             printf("CH%d max set to %d\n", ch, val);
+            changed = true;
+        }
+
+        if (hyst->count > 0) {
+        int val = hyst->ival[0];
+        if (val < 0 || val > 500) { 
+            printf("Error: hysteresis value must be 0-500\n"); 
+            arg_freetable(argtable, sizeof(argtable)/sizeof(argtable[0])); 
+            return 1;
+        }
+        hysteresis[ch] = val;
+        printf("CH%d hysteresis set to %d\n", ch, val);
         changed = true;
+        
+        // Save to NVS
+        nvs_set_channel_i32("ch_hyst", ch, hysteresis[ch]);
         }
     
         // Validate min <= max
         if (channel_min[ch] > channel_max[ch]) {
             printf("Warning: min (%d) > max (%d), swapping values\n", 
-                    channel_min[ch], channel_max[ch]);
+               channel_min[ch], channel_max[ch]);
             int tmp = channel_min[ch]; 
             channel_min[ch] = channel_max[ch]; 
             channel_max[ch] = tmp;
@@ -142,7 +166,7 @@ void register_config_command(void)
     esp_console_cmd_register(&(esp_console_cmd_t){
         .command = "config",
         .help = "Configure channels: min/max, read/write NVS, start info",
-        .hint = "[-h] [-r] [-w] [-c <ch>] [-m <min>] [-M <max>] [-s]",
+        .hint = "[-h] [-r] [-w] [-c <ch>] [-m <min>] [-M <max>] [-y <hyst>] [-s]",
         .func = &config_cmd
     });
 }
@@ -163,24 +187,53 @@ void cli_task(void *arg)
 {
     cli_init();
 
-    // Load min/max from NVS on startup
+    // Load min/max/hyst from NVS on startup
     for (int i = 0; i < CH_MAX; i++) {
         channel_min[i] = nvs_get_channel_i32("ch_min", i, 0);
         channel_max[i] = nvs_get_channel_i32("ch_max", i, 4095);
+        hysteresis[i] = nvs_get_channel_i32("ch_hyst", i, 10);
     }
     printf("Loaded channel configuration from NVS\n");
     
     printf("\nESP32 ADC CLI ready\n");
     printf("Type 'help' for available commands\n\n");
+
+    // Initialize linenoise for arrow key support
+    linenoiseSetMultiLine(1);
+    linenoiseSetMaxLineLen(128);
+    linenoiseHistorySetMaxLen(50);  // Remember last 50 commands
+
+    char *line;
+    while(1) {
+        line = linenoise("CMD> ");
     
-    // Start the console REPL
-    esp_console_repl_t *repl = NULL;
-    esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
-    repl_config.prompt = "CMD> ";
-    repl_config.max_cmdline_length = 128;
+        if (line == NULL) {  // EOF or error
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
     
-    esp_console_dev_uart_config_t uart_config = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_console_new_repl_uart(&uart_config, &repl_config, &repl));
+        // Skip empty lines
+        if (strlen(line) == 0) {
+            linenoiseFree(line);
+            continue;
+        }
     
-    ESP_ERROR_CHECK(esp_console_start_repl(repl));
+        // Add to history
+        linenoiseHistoryAdd(line);
+    
+        // Execute command
+        int ret;
+        esp_err_t err = esp_console_run(line, &ret);
+        if (err == ESP_ERR_NOT_FOUND) {
+            printf("Unknown command. Type 'help' for list.\n");
+        } else if (err == ESP_ERR_INVALID_ARG) {
+            // Command was empty, already handled
+        } else if (err == ESP_OK && ret != ESP_OK) {
+            printf("Command error: 0x%x\n", ret);
+        } else if (err != ESP_OK) {
+            printf("Error: %s\n", esp_err_to_name(err));
+        }
+    
+        linenoiseFree(line);
+    }
 }

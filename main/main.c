@@ -20,9 +20,12 @@
  */
 void app_main(void)
 {
+    // Initialize NVS first
     nvs_init();
+    
+    // Start ADC task
     xTaskCreate(adc_task, "adc_task", 4096, NULL, 5, NULL);
-    xTaskCreate(cli_task, "cli_task", 4096, NULL, 4, NULL);
-
-    printf("System ready. Type 'help' for available commands.\n");
+    
+    // Start CLI task - it will take over console output
+    xTaskCreate(cli_task, "cli_task", 8192, NULL, 4, NULL);
 }

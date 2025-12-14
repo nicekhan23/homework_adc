@@ -184,20 +184,17 @@ void register_commands(void)
  */
 void cli_task(void *arg)
 {
+    // Initialize console framework
     cli_init();
 
-    // Load min/max/hyst from NVS on startup
+    // Load min/max/hyst from NVS on startup (no printf yet)
     for (int i = 0; i < CH_MAX; i++) {
         channel_min[i] = nvs_get_channel_i32("ch_min", i, 0);
         channel_max[i] = nvs_get_channel_i32("ch_max", i, 4095);
         hysteresis[i] = nvs_get_channel_i32("ch_hyst", i, 10);
     }
-    printf("Loaded channel configuration from NVS\n");
     
-    printf("\nESP32 ADC CLI ready\n");
-    printf("Type 'help' for available commands\n\n");
-
-    // Start the console REPL
+    // Configure REPL
     esp_console_repl_t *repl = NULL;
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     repl_config.prompt = "CMD> ";
@@ -207,13 +204,18 @@ void cli_task(void *arg)
     
     esp_err_t err = esp_console_new_repl_uart(&uart_config, &repl_config, &repl);
     if (err != ESP_OK) {
-        printf("Error creating REPL: %s\n", esp_err_to_name(err));
         vTaskDelete(NULL);
         return;
     }
 
+    // Now safe to printf after REPL is created
+    printf("\n=== ESP32 ADC CLI ===\n");
+    printf("Loaded channel configuration from NVS\n");
+    printf("Type 'help' for available commands\n");
+    printf("=====================\n\n");
+
     err = esp_console_start_repl(repl);
     if (err != ESP_OK) {
-        printf("Error starting REPL: %s\n", esp_err_to_name(err));
+        vTaskDelete(NULL);
     }
 }

@@ -235,20 +235,28 @@ void cli_task(void *arg)
         while (*trimmed == ' ' || *trimmed == '\t' || *trimmed == '\r' || *trimmed == '\n') {
             trimmed++;
         }
-        
+
         // Remove trailing whitespace
         char *end = trimmed + strlen(trimmed) - 1;
         while (end > trimmed && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')) {
             *end = '\0';
             end--;
         }
-        
-        // Skip empty lines
-        if (strlen(trimmed) == 0) {
+
+        // Debug: check what we received
+        size_t len = strlen(trimmed);
+        if (len == 0) {
             linenoiseFree(line);
             continue;
         }
-        
+
+        // Debug output - remove after testing
+        ESP_LOGI("CLI", "Received line length=%d: '%s'", len, trimmed);
+        for (int i = 0; i < len; i++) {
+            ESP_LOGI("CLI", "  char[%d] = 0x%02X ('%c')", i, (unsigned char)trimmed[i], 
+                     (trimmed[i] >= 32 && trimmed[i] < 127) ? trimmed[i] : '?');
+        }
+
         // Add to history
         linenoiseHistoryAdd(trimmed);
         
@@ -262,7 +270,7 @@ void cli_task(void *arg)
         } else if (err != ESP_OK) {
             printf("Command failed: %s\n", esp_err_to_name(err));
         }
-    
+
         linenoiseFree(line);
     }
     vTaskDelete(NULL);

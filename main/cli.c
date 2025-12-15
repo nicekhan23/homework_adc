@@ -10,6 +10,7 @@
 #include "driver/uart.h"
 #include "esp_vfs_dev.h"
 #include "esp_log.h"
+#include "linenoise/linenoise.h"
 
 #define CMD_CONFIG "config"
 
@@ -187,88 +188,70 @@ void register_commands(void)
 void cli_task(void *arg)
 {
     ESP_LOGI("CLI", "cli_task started");
+    
+    // Small delay to let system stabilize
+    vTaskDelay(pdMS_TO_TICKS(500));
 
-    // Initialize UART and VFS for console
-    esp_err_t ret = ESP_OK;
-    
-    // Configure UART
-    uart_config_t uart_config = {
-        .baud_rate = 115200,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_APB,
-    };
-    
-    // Install UART driver
-    ret = uart_driver_install(UART_NUM_0, 
-                              256,    // RX buffer size
-                              0,      // TX buffer size  
-                              0,      // Queue size
-                              NULL,   // Queue handle
-                              0);     // Flags
-    if (ret != ESP_OK) {
-        ESP_LOGE("CLI", "UART driver install failed: %s", esp_err_to_name(ret));
-        vTaskDelete(NULL);
-        return;
-    }
-    
-    ret = uart_param_config(UART_NUM_0, &uart_config);
-    if (ret != ESP_OK) {
-        ESP_LOGE("CLI", "UART config failed: %s", esp_err_to_name(ret));
-        vTaskDelete(NULL);
-        return;
-    }
-    
-    // Tell VFS to use our UART driver for stdin/stdout
-    esp_vfs_dev_uart_use_driver(UART_NUM_0);
-    esp_vfs_dev_uart_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
-    esp_vfs_dev_uart_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
+    // Configure stdin to be unbuffered
+    setvbuf(stdin, NULL, _IONBF, 0);
+    setvbuf(stdout, NULL, _IONBF, 0);
 
-    ESP_LOGI("CLI", "UART initialized");
-
-    // Initialize console
+    // Initialize console with minimal config
     esp_console_config_t console_config = {
         .max_cmdline_length = 256,
         .max_cmdline_args = 16,
-        .hint_color = atoi(LOG_COLOR_CYAN),
+        .hint_color = 36,  // Cyan
     };
     
-    ret = esp_console_init(&console_config);
-    if (ret != ESP_OK) {
-        ESP_LOGE("CLI", "Console init failed: %s", esp_err_to_name(ret));
-        vTaskDelete(NULL);
-        return;
-    }
-
+    ESP_ERROR_CHECK(esp_console_init(&console_config));
+    
+    ESP_LOGI("CLI", "Console initialized");
+    
     register_commands();
-
-    // Configure REPL
-    esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
-    repl_config.prompt = "CMD> ";
-    repl_config.max_cmdline_length = 256;
-
-    esp_console_repl_t *repl = NULL;
     
-    // Use UART for REPL
-    esp_console_dev_uart_config_t uart_repl_config = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
+    ESP_LOGI("CLI", "Commands registered");
+
+    // Use linenoise for proper line editing
+    linenoiseSetMultiLine(1);
+    linenoiseHistorySetMaxLen(100);
+    linenoiseAllowEmpty(false);
+
+    printf("\n\n");
+    printf("Type 'help' to see available commands.\n");
     
-    ret = esp_console_new_repl_uart(&uart_repl_config, &repl_config, &repl);
-    if (ret != ESP_OK) {
-        ESP_LOGE("CLI", "REPL init failed: %s", esp_err_to_name(ret));
-        vTaskDelete(NULL);
-        return;
+    const char* prompt = "CMD> ";
+    
+    while (true) {
+        // Use linenoise for line input with editing support
+        char* line = linenoise(prompt);
+        
+        if (line == NULL) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        
+        // Skip empty lines
+        if (strlen(line) == 0) {
+            linenoiseFree(line);
+            continue;
+        }
+        
+        // Add to history
+        linenoiseHistoryAdd(line);
+        
+        // Run command
+        int ret;
+        esp_err_t err = esp_console_run(line, &ret);
+        if (err == ESP_ERR_NOT_FOUND) {
+            printf("Unknown command\n");
+        } else if (err == ESP_ERR_INVALID_ARG) {
+            printf("Invalid arguments\n");
+        } else if (err != ESP_OK) {
+            printf("Command failed: %s\n", esp_err_to_name(err));
+        }
+        
+        linenoiseFree(line);
     }
-
-    ESP_LOGI("CLI", "Starting REPL");
     
-    // Start REPL - this will block
-    ret = esp_console_start_repl(repl);
-    if (ret != ESP_OK) {
-        ESP_LOGE("CLI", "REPL start failed: %s", esp_err_to_name(ret));
-    }
-    
-    // Should never reach here
     vTaskDelete(NULL);
 }

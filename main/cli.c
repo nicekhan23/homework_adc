@@ -231,33 +231,39 @@ void cli_task(void *arg)
         }
         
         // Trim leading/trailing whitespace
-    char *trimmed = line;
-    while (*trimmed == ' ' || *trimmed == '\t' || *trimmed == '\r' || *trimmed == '\n') {
-        trimmed++;
-    }
-    
-    // Remove trailing whitespace
-    char *end = trimmed + strlen(trimmed) - 1;
-    while (end > trimmed && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')) {
-        *end = '\0';
-        end--;
-    }
-    
-    // Skip empty lines
-    if (strlen(trimmed) == 0) {
-        linenoiseFree(line);
-        continue;
-    }
-    
-    // Add to history
-    linenoiseHistoryAdd(trimmed);
-    
-    // Run command
-    int ret;
-    esp_err_t err = esp_console_run(trimmed, &ret);
+        char *trimmed = line;
+        while (*trimmed == ' ' || *trimmed == '\t' || *trimmed == '\r' || *trimmed == '\n') {
+            trimmed++;
+        }
         
+        // Remove trailing whitespace
+        char *end = trimmed + strlen(trimmed) - 1;
+        while (end > trimmed && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')) {
+            *end = '\0';
+            end--;
+        }
+        
+        // Skip empty lines
+        if (strlen(trimmed) == 0) {
+            linenoiseFree(line);
+            continue;
+        }
+        
+        // Add to history
+        linenoiseHistoryAdd(trimmed);
+        
+        // Run command
+        int ret;
+        esp_err_t err = esp_console_run(trimmed, &ret);
+        if (err == ESP_ERR_NOT_FOUND) {
+            printf("Unknown command\n");
+        } else if (err == ESP_ERR_INVALID_ARG) {
+            printf("Invalid arguments\n");
+        } else if (err != ESP_OK) {
+            printf("Command failed: %s\n", esp_err_to_name(err));
+        }
+    
         linenoiseFree(line);
     }
-    
     vTaskDelete(NULL);
 }

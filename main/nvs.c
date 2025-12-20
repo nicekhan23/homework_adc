@@ -1,7 +1,9 @@
 #include "nvs.h"
 #include "nvs_flash.h"
-#include "adc.h" // for check_channel()
+#include "adc.h"
+#include "esp_log.h"
 
+static const char *TAG = "NVS";
 static nvs_handle_t nvs;
 
 /**
@@ -10,10 +12,11 @@ static nvs_handle_t nvs;
 void nvs_init(void) {
     esp_err_t err = nvs_flash_init();
     if(err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        nvs_flash_erase();
-        nvs_flash_init();
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
     }
-    nvs_open("adc", NVS_READWRITE, &nvs);
+    ESP_ERROR_CHECK(err);
+    ESP_ERROR_CHECK(nvs_open("adc", NVS_READWRITE, &nvs));
 }
 
 void nvs_set_channel_i32(const char *prefix, int ch, int32_t val) {

@@ -4,6 +4,10 @@
 #include "esp_console.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_log.h"
+
+
+static const char *TAG = "ADC";
 
 /* ADC channel mapping */
 static adc1_channel_t adc_channels[CH_MAX] = {
@@ -39,6 +43,10 @@ void adc_task(void *arg)
         adc1_config_channel_atten(adc_channels[ch], ADC_ATTEN_DB_12);
     }
 
+    adc1_config_width(ADC_WIDTH_BIT_12);
+
+    ESP_LOGI(TAG, "ADC task started, monitoring %d channels", CH_MAX);
+
     while(1) {
         for(int ch=0; ch<CH_MAX; ch++) {
             adc_raw[ch] = adc1_get_raw(adc_channels[ch]);
@@ -48,6 +56,16 @@ void adc_task(void *arg)
                 adc_filtered[ch] = adc_avg[ch];
             else if(adc_avg[ch] < adc_filtered[ch] - hysteresis[ch])
                 adc_filtered[ch] = adc_avg[ch];
+
+            // Apply min/max scaling from NVS configuration
+            int32_t min_val = nvs_get_channel_i32("ch_min", ch, 0);
+            int32_t max_val = nvs_get_channel_i32("ch_max", ch, 4095);
+
+            if (max_val > min_val) {
+                adc_filtered[ch] = min_val + ((adc_filtered[ch] * (max_val - min_val)) / 4095);
+            } else {
+                adc_filtered[ch] = min_val;
+            }
 
             if(adc_filtered[ch] != last_saved[ch]) {
                 last_saved[ch] = adc_filtered[ch];

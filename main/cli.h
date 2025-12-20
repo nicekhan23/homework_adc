@@ -7,7 +7,7 @@ void register_commands(void);
 /**
  * @brief CLI FreeRTOS task
  */
-void cli_task(void *arg);
+void cli_init(void);
 
 /**
  * @brief Channel configuration

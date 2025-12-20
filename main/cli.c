@@ -4,274 +4,234 @@
 #include "esp_console.h"
 #include "argtable3/argtable3.h"
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <inttypes.h>
+#include <ctype.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
 #include "driver/uart.h"
 #include "esp_vfs_dev.h"
-#include "esp_log.h"
-#include "linenoise/linenoise.h"
 
-#define CMD_CONFIG "config"
-
-int channel_min[CH_MAX] = {0, 0, 0, 0, 0, 0};
-int channel_max[CH_MAX] = {4095, 4095, 4095, 4095, 4095, 4095};
+#define PROMPT "> "
 
 static struct {
     struct arg_lit *help;
-    struct arg_lit *read;
-    struct arg_lit *write;
     struct arg_int *channel;
-    struct arg_int *minval;
-    struct arg_int *maxval;
-    struct arg_lit *status;
+    struct arg_int *min;
+    struct arg_int *max;
     struct arg_int *hyst;
+    struct arg_lit *start;
     struct arg_end *end;
-} config_args;
+} args;
 
 /**
- * @brief Configure ADC channel settings via CLI
+ * @brief Scale raw ADC value to configured range with hysteresis
+ * @param raw_adc Raw ADC value (0-4095)
+ * @param min_val Configured minimum value
+ * @param max_val Configured maximum value
+ * @param hyst_val Hysteresis value
+ * @param prev_scaled Previous scaled value (for hysteresis)
+ * @return Scaled value with hysteresis applied
  */
-static void print_help_config(void) {
-    arg_print_syntax(stdout, (void *)&config_args, "\n");
-    arg_print_glossary(stdout, (void *)&config_args, "  %-25s %s\n");
+static int scale_adc_value(int raw_adc, int32_t min_val, int32_t max_val, 
+                          int32_t hyst_val, int prev_scaled) {
+    if (max_val <= min_val) {
+        return min_val;
+    }
+    
+    // Map raw ADC (0-4095) to configured range (min-max)
+    int new_scaled = min_val + ((raw_adc * (max_val - min_val)) / 4095);
+    
+    // Apply hysteresis
+    if (abs(new_scaled - prev_scaled) < hyst_val) {
+        return prev_scaled;  // Stay at previous value if within hysteresis
+    }
+    
+    return new_scaled;
 }
 
-static void print_channel_status(void) {
-    printf("\n=== Channel Status ===\n");
+/**
+ * @brief Print channel configuration and current values
+ */
+static void print_channel_info(void) {
+    printf("\n=== ADC Channel Configuration ===\n");
     for (int i = 0; i < CH_MAX; i++) {
-        printf("CH%d: min=%4d, max=%4d, raw=%4d, avg=%4d, filtered=%4d, hyst=%d\n", 
-                i, channel_min[i], channel_max[i], 
-                adc_raw[i], adc_avg[i], adc_filtered[i], hysteresis[i]);
+        int32_t min_val = nvs_get_channel_i32("ch_min", i, 0);
+        int32_t max_val = nvs_get_channel_i32("ch_max", i, 4095);
+        int32_t hyst_val = nvs_get_channel_i32("ch_hyst", i, 10);
+        int raw_adc = adc_filtered[i];
+        
+        // Map raw ADC (0-4095) to configured range (min-max)
+        int scaled_value;
+        if (max_val > min_val) {
+            scaled_value = min_val + ((raw_adc * (max_val - min_val)) / 4095);
+        } else {
+            scaled_value = min_val;
+        }
+        
+        printf("CH%d: min=%4ld, max=%4ld, hyst=%3ld, raw=%4d, scaled=%4d\n",
+               i, min_val, max_val, hyst_val, raw_adc, scaled_value);
     }
-    printf("======================\n");
+    printf("=================================\n");
 }
 
-static int cmd_config(int argc, char **argv) {
-    int errors = arg_parse(argc, argv, (void *)&config_args);
-    
-    if (errors > 0 || config_args.help->count > 0) {
-        print_help_config();
-        return 0;
+/**
+ * @brief Validate channel configuration
+ * @return true if valid, false otherwise
+ */
+static bool validate_config(int ch, int min, int max, int hyst) {
+    if (ch < 0 || ch >= CH_MAX) {
+        printf("Error: Channel must be 0-%d\n", CH_MAX-1);
+        return false;
     }
-
-    int ch = (config_args.channel->count > 0) ? config_args.channel->ival[0] : -1;
     
-    if (ch >= CH_MAX || ch < -1) {
-        printf("Invalid channel (must be 0-%d)\n", CH_MAX-1);
+    if (min < 0 || min > 4095) {
+        printf("Error: Min must be 0-4095\n");
+        return false;
+    }
+    
+    if (max < 0 || max > 4095) {
+        printf("Error: Max must be 0-4095\n");
+        return false;
+    }
+    
+    if (hyst < 0 || hyst > 500) {
+        printf("Error: Hysteresis must be 0-500\n");
+        return false;
+    }
+    
+    if (min > max) {
+        printf("Error: Min (%d) cannot be greater than Max (%d)\n", min, max);
+        return false;
+    }
+    
+    return true;
+}
+
+/**
+ * @brief Configuration command handler
+ */
+static int cmd_config(int argc, char **argv) {
+    int nerrors = arg_parse(argc, argv, (void *)&args);
+    
+    if (nerrors != 0) {
+        arg_print_errors(stderr, args.end, argv[0]);
         return 1;
     }
 
-    // Read from NVS
-    if (config_args.read->count > 0) {
-        for (int i = 0; i < CH_MAX; i++) {
-            channel_min[i] = nvs_get_channel_i32("ch_min", i, 0);
-            channel_max[i] = nvs_get_channel_i32("ch_max", i, 4095);
-            hysteresis[i] = nvs_get_channel_i32("ch_hyst", i, 10);
-        }
-        printf("Loaded configuration from NVS\n");
+    // Show start information
+    if (args.start->count > 0) {
+        print_channel_info();
+        return 0;
     }
 
-    // Write to NVS
-    if (config_args.write->count > 0) {
-        for (int i = 0; i < CH_MAX; i++) {
-            nvs_set_channel_i32("ch_min", i, channel_min[i]);
-            nvs_set_channel_i32("ch_max", i, channel_max[i]);
-            nvs_set_channel_i32("ch_hyst", i, hysteresis[i]);
-        }
-        printf("Saved configuration to NVS\n");
+    // Check if channel is required for other operations
+    if ((args.min->count > 0 || args.max->count > 0 || args.hyst->count > 0) && 
+        args.channel->count == 0) {
+        printf("Error: Channel (-c) is required when setting min/max/hyst\n");
+        return 1;
     }
 
-    // Set values for specific channel
-    if (config_args.minval->count > 0 || config_args.maxval->count > 0 || config_args.hyst->count > 0) {
-        if (ch == -1) {
-            printf("Error: Specify channel with -c when setting values\n");
+    // Handle channel-specific operations
+    if (args.channel->count > 0) {
+        int ch = args.channel->ival[0];
+        
+        if (ch < 0 || ch >= CH_MAX) {
+            printf("Error: Invalid channel. Must be 0-%d\n", CH_MAX-1);
             return 1;
         }
 
+        // Get current values from NVS
+        int current_min = nvs_get_channel_i32("ch_min", ch, 0);
+        int current_max = nvs_get_channel_i32("ch_max", ch, 4095);
+        int current_hyst = nvs_get_channel_i32("ch_hyst", ch, 10);
+        
+        // Apply new values if provided
+        int new_min = (args.min->count > 0) ? args.min->ival[0] : current_min;
+        int new_max = (args.max->count > 0) ? args.max->ival[0] : current_max;
+        int new_hyst = (args.hyst->count > 0) ? args.hyst->ival[0] : current_hyst;
+
+        // Validate configuration
+        if (!validate_config(ch, new_min, new_max, new_hyst)) {
+            return 1;
+        }
+
+        // Save new values to NVS
         bool changed = false;
-
-        if (config_args.minval->count > 0) {
-            int val = config_args.minval->ival[0];
-            if (val < 0 || val > 4095) {
-                printf("Error: min must be 0-4095\n");
-                return 1;
-            }
-            channel_min[ch] = val;
-            printf("CH%d min = %d\n", ch, val);
+        
+        if (new_min != current_min) {
+            nvs_set_channel_i32("ch_min", ch, new_min);
+            printf("CH%d min set to %d\n", ch, new_min);
             changed = true;
         }
-
-        if (config_args.maxval->count > 0) {
-            int val = config_args.maxval->ival[0];
-            if (val < 0 || val > 4095) {
-                printf("Error: max must be 0-4095\n");
-                return 1;
-            }
-            channel_max[ch] = val;
-            printf("CH%d max = %d\n", ch, val);
+        
+        if (new_max != current_max) {
+            nvs_set_channel_i32("ch_max", ch, new_max);
+            printf("CH%d max set to %d\n", ch, new_max);
             changed = true;
         }
-
-        if (config_args.hyst->count > 0) {
-            int val = config_args.hyst->ival[0];
-            if (val < 0 || val > 500) {
-                printf("Error: hysteresis must be 0-500\n");
-                return 1;
-            }
-            hysteresis[ch] = val;
-            printf("CH%d hysteresis = %d\n", ch, val);
+        
+        if (new_hyst != current_hyst) {
+            nvs_set_channel_i32("ch_hyst", ch, new_hyst);
+            printf("CH%d hysteresis set to %d\n", ch, new_hyst);
             changed = true;
         }
-
-        // Validate and save
-        if (channel_min[ch] > channel_max[ch]) {
-            printf("Warning: min > max, swapping\n");
-            int tmp = channel_min[ch];
-            channel_min[ch] = channel_max[ch];
-            channel_max[ch] = tmp;
-        }
-
+        
         if (changed) {
-            nvs_set_channel_i32("ch_min", ch, channel_min[ch]);
-            nvs_set_channel_i32("ch_max", ch, channel_max[ch]);
-            nvs_set_channel_i32("ch_hyst", ch, hysteresis[ch]);
-            printf("Saved to NVS\n");
+            printf("Changes saved to NVS for CH%d\n", ch);
+        } else {
+            printf("No changes made for CH%d\n", ch);
         }
-    }
-
-    // Show status
-    if (config_args.status->count > 0) {
-        print_channel_status();
     }
 
     return 0;
 }
 
 /**
- * @brief Register new config command
+ * @brief Register configuration command
  */
 static void register_config_command(void) {
-    config_args.help = arg_litn("h", "help", 0, 1, "Show help");
-    config_args.read = arg_litn("r", "read", 0, 1, "Read from NVS");
-    config_args.write = arg_litn("w", "write", 0, 1, "Write to NVS");
-    config_args.channel = arg_intn("c", "channel", "<ch>", 0, 1, "Channel 0-5");
-    config_args.minval = arg_intn("m", "min", "<val>", 0, 1, "Min value");
-    config_args.maxval = arg_intn("M", "max", "<val>", 0, 1, "Max value");
-    config_args.status = arg_litn("s", "status", 0, 1, "Show status");
-    config_args.hyst = arg_intn("y", "hyst", "<val>", 0, 1, "Hysteresis");
-    config_args.end = arg_end(20);
+    args.help = arg_litn("h", "help", 0, 1, "Show help");
+    args.channel = arg_intn("c", "channel", "<n>", 0, 1, "Channel number (0-5)");
+    args.min = arg_intn("m", "min", "<val>", 0, 1, "Minimum value (0-4095)");
+    args.max = arg_intn("M", "max", "<val>", 0, 1, "Maximum value (0-4095)");
+    args.hyst = arg_intn("H", "hyst", "<val>", 0, 1, "Hysteresis (0-500)");
+    args.start = arg_litn("s", "start", 0, 1, "Show channel information");
+    args.end = arg_end(10);
 
     esp_console_cmd_t cmd = {
-        .command = CMD_CONFIG,
+        .command = "config",
         .help = "Configure ADC channels",
         .hint = NULL,
         .func = &cmd_config,
-        .argtable = &config_args
+        .argtable = &args
     };
 
     esp_console_cmd_register(&cmd);
 }
 
 /**
- * @brief Register all CLI commands
+ * @brief Initialize and start CLI
  */
-void register_commands(void)
+void cli_init(void)
 {
-    esp_console_register_help_command();
+    ESP_LOGI("CLI", "Initializing CLI");
+    
+    // Initialize console
+    esp_console_repl_t *repl = NULL;
+    esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
+    repl_config.prompt = "CMD> ";
+    repl_config.max_cmdline_length = 256;
+
+    // Initialize UART for console
+    esp_console_dev_uart_config_t hw_config = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_console_new_repl_uart(&hw_config, &repl_config, &repl));
+
+    // Register commands
     register_config_command();
-}
-
-/**
- * @brief CLI task for FreeRTOS
- */
-void cli_task(void *arg)
-{
-    ESP_LOGI("CLI", "cli_task started");
     
-    // Small delay to let system stabilize
-    vTaskDelay(pdMS_TO_TICKS(500));
-
-    // Configure stdin to be unbuffered
-    setvbuf(stdin, NULL, _IONBF, 0);
-    setvbuf(stdout, NULL, _IONBF, 0);
-
-    // Initialize console with minimal config
-    esp_console_config_t console_config = {
-        .max_cmdline_length = 256,
-        .max_cmdline_args = 16,
-        .hint_color = 36,  // Cyan
-    };
+    ESP_LOGI("CLI", "Starting REPL");
     
-    ESP_ERROR_CHECK(esp_console_init(&console_config));
-    
-    ESP_LOGI("CLI", "Console initialized");
-    
-    register_commands();
-    
-    ESP_LOGI("CLI", "Commands registered");
-
-    // Use linenoise for proper line editing
-    linenoiseSetMultiLine(1);
-    linenoiseHistorySetMaxLen(100);
-    linenoiseAllowEmpty(false);
-
-    printf("\n\n");
-    printf("Type 'help' to see available commands.\n");
-    
-    const char* prompt = "CMD> ";
-    
-    while (true) {
-        // Use linenoise for line input with editing support
-        char* line = linenoise(prompt);
-        
-        if (line == NULL) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-        
-        // Trim leading/trailing whitespace
-        char *trimmed = line;
-        while (*trimmed == ' ' || *trimmed == '\t' || *trimmed == '\r' || *trimmed == '\n') {
-            trimmed++;
-        }
-
-        // Remove trailing whitespace
-        char *end = trimmed + strlen(trimmed) - 1;
-        while (end > trimmed && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')) {
-            *end = '\0';
-            end--;
-        }
-
-        // Debug: check what we received
-        size_t len = strlen(trimmed);
-        if (len == 0) {
-            linenoiseFree(line);
-            continue;
-        }
-
-        // Debug output - remove after testing
-        ESP_LOGI("CLI", "Received line length=%d: '%s'", len, trimmed);
-        for (int i = 0; i < len; i++) {
-            ESP_LOGI("CLI", "  char[%d] = 0x%02X ('%c')", i, (unsigned char)trimmed[i], 
-                     (trimmed[i] >= 32 && trimmed[i] < 127) ? trimmed[i] : '?');
-        }
-
-        // Add to history
-        linenoiseHistoryAdd(trimmed);
-        
-        // Run command
-        int ret;
-        esp_err_t err = esp_console_run(trimmed, &ret);
-        if (err == ESP_ERR_NOT_FOUND) {
-            printf("Unknown command\n");
-        } else if (err == ESP_ERR_INVALID_ARG) {
-            printf("Invalid arguments\n");
-        } else if (err != ESP_OK) {
-            printf("Command failed: %s\n", esp_err_to_name(err));
-        }
-
-        linenoiseFree(line);
-    }
-    vTaskDelete(NULL);
+    // Start the REPL (this blocks)
+    ESP_ERROR_CHECK(esp_console_start_repl(repl));
 }

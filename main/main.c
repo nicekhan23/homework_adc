@@ -25,6 +25,6 @@ void app_main(void)
     // Give ADC task time to initialize before starting CLI
     vTaskDelay(pdMS_TO_TICKS(100));
     
-    xTaskCreate(cli_task, "cli_task", 16384, NULL, 4, NULL);
+    cli_init();  // This will block and run the REPL
 }
 
